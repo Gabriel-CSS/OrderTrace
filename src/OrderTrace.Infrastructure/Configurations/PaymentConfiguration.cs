@@ -27,5 +27,10 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
 
         builder.Property(p => p.CompletedAt)
             .IsRequired(false);
+
+        // Configura a navegação para usar o backing field
+        builder.Metadata
+            .FindNavigation(nameof(Payment.Transactions))!
+            .SetPropertyAccessMode(PropertyAccessMode.Field);
     }
 }

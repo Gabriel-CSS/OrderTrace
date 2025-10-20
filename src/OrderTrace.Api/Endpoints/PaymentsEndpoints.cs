@@ -1,28 +1,45 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OrderTrace.Core.Entities;
-using OrderTrace.Core.Enums;
 using OrderTrace.Infrastructure;
 using OrderTrace.Infrastructure.Messaging.PaymentQueue;
 
 namespace OrderTrace.Api.Endpoints;
 
-public static class PaymentsEndpoints
+public class PaymentsEndpoints : IEndpointMapper
 {
-    public static void MapPaymentsEndpoints(this WebApplication app)
+    public static void MapEndpoints(IEndpointRouteBuilder app)
     {
-        app.MapPost("/payments", async (Payment payment, OrderTraceDbContext db, IPaymentQueue queue) =>
+        app.MapPost("/payments", async (CreatePaymentRequest request, OrderTraceDbContext db, IPaymentQueue queue) =>
         {
-            payment.Id = Guid.NewGuid();
-            payment.CreatedAt = DateTime.UtcNow;
-            payment.Status = PaymentStatus.Processing;
+            try
+            {
+                var order = await db.Orders.FindAsync(request.OrderId);
+                if (order == null)
+                {
+                    return Results.NotFound(new { error = $"Pedido {request.OrderId} não encontrado" });
+                }
 
-            db.Payments.Add(payment);
-            await db.SaveChangesAsync();
+                var existingPayment = await db.Payments
+                    .FirstOrDefaultAsync(p => p.OrderId == request.OrderId);
 
-            // Envia para fila
-            await queue.EnqueueAsync(payment);
+                if (existingPayment != null)
+                {
+                    return Results.Conflict(new { error = "Este pedido já possui um pagamento associado" });
+                }
 
-            return Results.Accepted($"/payments/{payment.Id}", payment);
+                var payment = Payment.Create(request.OrderId, request.Amount);
+
+                db.Payments.Add(payment);
+                await db.SaveChangesAsync();
+
+                await queue.EnqueueAsync(payment);
+
+                return Results.Accepted($"/payments/{payment.Id}", payment);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
         });
 
         app.MapGet("/payments/{id:guid}", async (Guid id, OrderTraceDbContext db) =>
@@ -46,3 +63,5 @@ public static class PaymentsEndpoints
         });
     }
 }
+
+public record CreatePaymentRequest(Guid OrderId, decimal Amount);

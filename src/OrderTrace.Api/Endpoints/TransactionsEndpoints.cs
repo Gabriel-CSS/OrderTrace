@@ -3,9 +3,9 @@ using OrderTrace.Infrastructure;
 
 namespace OrderTrace.Api.Endpoints;
 
-public static class TransactionsEndpoints
+public class TransactionsEndpoints : IEndpointMapper
 {
-    public static void MapTransactionsEndpoints(this WebApplication app)
+    public static void MapEndpoints(IEndpointRouteBuilder app)
     {
         app.MapGet("/transactions", async (Guid? orderId, OrderTraceDbContext db) =>
         {

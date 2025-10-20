@@ -4,26 +4,32 @@ using OrderTrace.Infrastructure;
 
 namespace OrderTrace.Api.Endpoints;
 
-public static class OrdersEndpoints
+public class OrdersEndpoints : IEndpointMapper
 {
-    public static void MapOrdersEndpoints(this WebApplication app)
+    public static void MapEndpoints(IEndpointRouteBuilder app)
     {
-        app.MapPost("/orders", async (Order order, OrderTraceDbContext db) =>
+        app.MapPost("/orders", async (CreateOrderRequest request, OrderTraceDbContext db) =>
         {
-            order.Id = Guid.NewGuid();
-            order.CreatedAt = DateTime.UtcNow;
-            order.Status = Core.Enums.OrderStatus.Pending;
+            try
+            {
+                var order = Order.Create(request.ExternalOrderId, request.Amount);
 
-            db.Orders.Add(order);
-            await db.SaveChangesAsync();
-            return Results.Created($"/orders/{order.Id}", order);
+                db.Orders.Add(order);
+                await db.SaveChangesAsync();
+
+                return Results.Created($"/orders/{order.Id}", order);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
         });
 
         app.MapGet("/orders/{id:guid}", async (Guid id, OrderTraceDbContext db) =>
         {
             var order = await db.Orders
                 .Include(o => o.Payment)
-                    .ThenInclude(p => p.Transactions)
+                    .ThenInclude(p => p!.Transactions)
                 .FirstOrDefaultAsync(o => o.Id == id);
 
             return order is null ? Results.NotFound() : Results.Ok(order);
@@ -33,9 +39,11 @@ public static class OrdersEndpoints
         {
             var orders = await db.Orders
                 .Include(o => o.Payment)
-                    .ThenInclude(p => p.Transactions)
+                    .ThenInclude(p => p!.Transactions)
                 .ToListAsync();
             return Results.Ok(orders);
         });
     }
 }
+
+public record CreateOrderRequest(string ExternalOrderId, decimal Amount);
