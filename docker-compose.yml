@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # OrderTrace API
+  api:
+    build:
+      context: .
+      dockerfile: src/OrderTrace.Api/Dockerfile
+    container_name: ordertrace-api
+    ports:
+      - "5000:8080"       # HTTP
+      - "5001:8081"       # HTTPS (se configurado)
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Docker
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=ordertrace;Username=postgres;Password=postgres
+      - OpenTelemetry__UseOtlpExporter=true
+      - OpenTelemetry__OtlpEndpoint=http://jaeger:4318
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    networks:
+      - ordertrace-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/orders"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Jaeger - Distributed Tracing
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: ordertrace-jaeger
+    ports:
+      - "5775:5775/udp"   # zipkin.thrift over compact thrift protocol (deprecated)
+      - "6831:6831/udp"   # jaeger.thrift over compact thrift protocol (deprecated)
+      - "6832:6832/udp"   # jaeger.thrift over binary thrift protocol (deprecated)
+      - "5778:5778"       # serve configs
+      - "16686:16686"     # Jaeger UI
+      - "14268:14268"     # jaeger.thrift directly from clients
+      - "14250:14250"     # gRPC
+      - "4317:4317"       # OTLP gRPC
+      - "4318:4318"       # OTLP HTTP
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - ordertrace-network
+    restart: unless-stopped
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: ordertrace-postgres
+    environment:
+      POSTGRES_DB: ordertrace
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ordertrace-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  ordertrace-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

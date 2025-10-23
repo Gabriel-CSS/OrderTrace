@@ -2,23 +2,35 @@ using Microsoft.EntityFrameworkCore;
 using OrderTrace.Api.Endpoints;
 using OrderTrace.Infrastructure;
 using Serilog;
+using Serilog.Enrichers.Span;
+using Serilog.Formatting.Compact;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // OpenAPI/Swagger
 builder.Services.AddOpenApi();
 
-// Infraestrutura (Database, Messaging, Background Services, etc.)
+// Infraestrutura (Database, Messaging, Background Services, Observability, etc.)
 builder.Services.AddInfrastructure(builder.Configuration);
 
-// Serilog
+// Serilog com logs estruturados e correlação com traces
 Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Debug()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore", Serilog.Events.LogEventLevel.Warning)
     .Enrich.FromLogContext()
+    .Enrich.WithProperty("Application", "OrderTrace")
+    .Enrich.WithProperty("Environment", builder.Configuration["Environment"] ?? "development")
     .Enrich.WithEnvironmentName()
+    .Enrich.WithMachineName()
     .Enrich.WithThreadId()
-    .WriteTo.Console()
-    .WriteTo.File("logs/ordertrace.log", rollingInterval: RollingInterval.Day)
+    .Enrich.WithSpan()
+    .WriteTo.Console(new CompactJsonFormatter())
+    .WriteTo.File(
+        new CompactJsonFormatter(),
+        "logs/ordertrace-.json",
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 7)
     .CreateLogger();
 
 builder.Host.UseSerilog();

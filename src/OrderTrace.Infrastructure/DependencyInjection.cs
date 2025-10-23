@@ -1,10 +1,14 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using OrderTrace.Infrastructure.Messaging;
 using OrderTrace.Infrastructure.Messaging.NotificationService;
 using OrderTrace.Infrastructure.Messaging.PaymentQueue;
 using OrderTrace.Infrastructure.PaymentGateway;
+using OrderTrace.Observability;
 
 namespace OrderTrace.Infrastructure;
 
@@ -22,6 +26,7 @@ public static class DependencyInjection
         services.AddMessaging();
         services.AddPaymentGateway();
         services.AddBackgroundServices();
+        services.AddObservability(configuration);
 
         return services;
     }
@@ -67,6 +72,68 @@ public static class DependencyInjection
     private static IServiceCollection AddBackgroundServices(this IServiceCollection services)
     {
         services.AddHostedService<PaymentProcessingService>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Configura OpenTelemetry com Tracing e Metrics
+    /// </summary>
+    private static IServiceCollection AddObservability(this IServiceCollection services, IConfiguration configuration)
+    {
+        var environment = configuration["Environment"] ?? "development";
+        var useOtlpExporter = configuration.GetValue<bool>("OpenTelemetry:UseOtlpExporter", false);
+
+        services.AddOpenTelemetry()
+            .ConfigureResource(resource => resource
+                .AddService(
+                    serviceName: ActivitySources.ServiceName,
+                    serviceVersion: ActivitySources.ServiceVersion)
+                .AddAttributes(new Dictionary<string, object>
+                {
+                    ["environment"] = environment,
+                    ["host.name"] = Environment.MachineName,
+                    ["deployment.environment"] = environment
+                }))
+            .WithTracing(tracing =>
+            {
+                tracing
+                    .AddAspNetCoreInstrumentation(options =>
+                    {
+                        options.RecordException = true;
+                        options.Filter = httpContext =>
+                        {
+                            var path = httpContext.Request.Path.Value ?? string.Empty;
+                            return !path.Contains("/health") && !path.Contains("/metrics");
+                        };
+                    })
+                    .AddHttpClientInstrumentation(options =>
+                    {
+                        options.RecordException = true;
+                    })
+                    .AddEntityFrameworkCoreInstrumentation()
+                    .AddSource(ActivitySources.PaymentProcessing.Name)
+                    .AddSource(ActivitySources.Gateway.Name)
+                    .AddSource(ActivitySources.Domain.Name)
+                    .AddSource(ActivitySources.Messaging.Name)
+                    .AddConsoleExporter();
+
+                if (useOtlpExporter)
+                {
+                    tracing.AddOtlpExporter(otlpOptions =>
+                    {
+                        otlpOptions.Endpoint = new Uri(
+                            configuration["OpenTelemetry:OtlpEndpoint"] ?? "http://localhost:4318");
+                    });
+                }
+            })
+            .WithMetrics(metrics =>
+            {
+                metrics
+                    .AddAspNetCoreInstrumentation()
+                    .AddHttpClientInstrumentation()
+                    .AddMeter(ActivitySources.ServiceName + ".*");
+            });
 
         return services;
     }

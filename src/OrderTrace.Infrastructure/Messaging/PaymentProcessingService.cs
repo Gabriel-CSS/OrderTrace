@@ -6,6 +6,7 @@ using OrderTrace.Core.Entities;
 using OrderTrace.Infrastructure.Messaging.NotificationService;
 using OrderTrace.Infrastructure.Messaging.PaymentQueue;
 using OrderTrace.Infrastructure.PaymentGateway;
+using OrderTrace.Observability;
 using System.Diagnostics;
 
 namespace OrderTrace.Infrastructure.Messaging;
@@ -27,9 +28,14 @@ public class PaymentProcessingService(
             {
                 var payment = await queue.DequeueAsync(stoppingToken);
 
-                using var activity = Activity.Current?.Source.StartActivity("ProcessPayment");
+                using var activity = ActivitySources.PaymentProcessing.StartActivity(
+                    "ProcessPayment",
+                    ActivityKind.Consumer);
+
                 activity?.SetTag("payment.id", payment.Id);
+                activity?.SetTag("payment.order_id", payment.OrderId);
                 activity?.SetTag("payment.amount", payment.Amount);
+                activity?.SetTag("payment.status", payment.Status.ToString());
 
                 await ProcessPaymentAsync(payment, stoppingToken);
             }
@@ -41,6 +47,9 @@ public class PaymentProcessingService(
             catch (Exception ex)
             {
                 logger.LogError(ex, "Erro inesperado ao processar pagamento");
+                Activity.Current?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                Activity.Current?.RecordException(ex);
+
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
             }
         }
@@ -50,6 +59,8 @@ public class PaymentProcessingService(
 
     private async Task ProcessPaymentAsync(Payment payment, CancellationToken cancellationToken)
     {
+        using var activity = ActivitySources.PaymentProcessing.StartActivity("ProcessPaymentWorkflow");
+
         logger.LogInformation(
             "Iniciando processamento de pagamento. PaymentId: {PaymentId}, OrderId: {OrderId}, Amount: {Amount}",
             payment.Id, payment.OrderId, payment.Amount);
@@ -59,7 +70,13 @@ public class PaymentProcessingService(
 
         try
         {
+            using var gatewayActivity = ActivitySources.PaymentProcessing.StartActivity("CallPaymentGateway");
+            gatewayActivity?.SetTag("payment.id", payment.Id);
+
             var gatewayResult = await gateway.ProcessPaymentAsync(payment, cancellationToken);
+
+            gatewayActivity?.SetTag("gateway.attempts", gatewayResult.AttemptsCount);
+            gatewayActivity?.SetTag("gateway.success", gatewayResult.Success);
 
             foreach (var transaction in gatewayResult.Transactions)
             {
@@ -74,6 +91,7 @@ public class PaymentProcessingService(
             if (gatewayResult.Success)
             {
                 payment.Approve();
+                activity?.SetTag("payment.final_status", "Approved");
                 logger.LogInformation(
                     "Pagamento aprovado após {Attempts} tentativa(s). PaymentId: {PaymentId}",
                     gatewayResult.AttemptsCount, payment.Id);
@@ -81,23 +99,26 @@ public class PaymentProcessingService(
             else
             {
                 payment.Fail();
+                activity?.SetTag("payment.final_status", "Failed");
                 logger.LogWarning(
                     "Pagamento falhou após {Attempts} tentativa(s). PaymentId: {PaymentId}",
                     gatewayResult.AttemptsCount, payment.Id);
             }
 
             await UpdateOrderStatusAsync(payment, db, cancellationToken);
-
             await SaveChangesWithRetryAsync(db, cancellationToken);
-
             await notifier.NotifyPaymentProcessed(payment);
 
+            activity?.SetStatus(ActivityStatusCode.Ok);
             logger.LogInformation(
                 "Pagamento processado com sucesso. PaymentId: {PaymentId}, Status: {Status}",
                 payment.Id, payment.Status);
         }
         catch (Exception ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.RecordException(ex);
+
             logger.LogError(ex,
                 "Erro ao processar pagamento. PaymentId: {PaymentId}, OrderId: {OrderId}",
                 payment.Id, payment.OrderId);

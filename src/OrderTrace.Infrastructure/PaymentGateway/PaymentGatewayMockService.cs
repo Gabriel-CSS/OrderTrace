@@ -1,7 +1,9 @@
 ﻿using Microsoft.Extensions.Logging;
 using OrderTrace.Core.Entities;
+using OrderTrace.Observability;
 using Polly;
 using Polly.Retry;
+using System.Diagnostics;
 
 namespace OrderTrace.Infrastructure.PaymentGateway;
 
@@ -19,6 +21,11 @@ public class PaymentGatewayMockService : IPaymentGatewayMockService
 
     public async Task<PaymentGatewayResult> ProcessPaymentAsync(Payment payment, CancellationToken cancellationToken = default)
     {
+        using var activity = ActivitySources.Gateway.StartActivity("ProcessPayment", ActivityKind.Client);
+        activity?.SetTag("payment.id", payment.Id);
+        activity?.SetTag("payment.amount", payment.Amount);
+        activity?.SetTag("gateway.name", GatewayName);
+
         var transactions = new List<Transaction>();
         bool finalSuccess = false;
 
@@ -39,7 +46,6 @@ public class PaymentGatewayMockService : IPaymentGatewayMockService
                         "Tentativa de pagamento falhou. PaymentId: {PaymentId}, Attempt: {Attempt}, ResponseCode: {ResponseCode}",
                         payment.Id, transactions.Count, transaction.ResponseCode);
 
-                    // Lança exceção para triggerar retry
                     throw new PaymentGatewayException($"Transação falhou com código: {transaction.ResponseCode}");
                 }
 
@@ -49,13 +55,21 @@ public class PaymentGatewayMockService : IPaymentGatewayMockService
 
                 return true;
             }, cancellationToken);
+
+            activity?.SetTag("gateway.success", true);
+            activity?.SetTag("gateway.total_attempts", transactions.Count);
+            activity?.SetStatus(ActivityStatusCode.Ok);
         }
         catch (PaymentGatewayException ex)
         {
-            // Todas as tentativas falharam
             _logger.LogError(
                 "Pagamento falhou após {MaxRetries} tentativas. PaymentId: {PaymentId}. Erro: {Error}",
                 MaxRetries, payment.Id, ex.Message);
+
+            activity?.SetTag("gateway.success", false);
+            activity?.SetTag("gateway.total_attempts", transactions.Count);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.RecordException(ex);
 
             finalSuccess = false;
         }
@@ -97,8 +111,13 @@ public class PaymentGatewayMockService : IPaymentGatewayMockService
     /// </summary>
     private async Task<Transaction> AttemptPaymentAsync(Guid paymentId, CancellationToken cancellationToken)
     {
+        using var activity = ActivitySources.Gateway.StartActivity("AttemptPayment");
+        activity?.SetTag("payment.id", paymentId);
+
         // Simula delay de rede/processamento (100ms a 1000ms)
         int delayMs = Random.Shared.Next(100, 1000);
+        activity?.SetTag("gateway.delay_ms", delayMs);
+
         await Task.Delay(delayMs, cancellationToken);
 
         // Simula sucesso/falha baseado na taxa de sucesso configurada
@@ -107,12 +126,20 @@ public class PaymentGatewayMockService : IPaymentGatewayMockService
         var responseCode = success ? "00" : "99";
         var responseMessage = success ? "Approved" : "Insufficient funds";
 
-        return Transaction.Create(
+        activity?.SetTag("gateway.response_code", responseCode);
+        activity?.SetTag("gateway.response_message", responseMessage);
+        activity?.SetTag("gateway.success", success);
+
+        var transaction = Transaction.Create(
             paymentId: paymentId,
             gateway: GatewayName,
             responseCode: responseCode,
             responseMessage: responseMessage
         );
+
+        activity?.SetTag("transaction.id", transaction.Id);
+
+        return transaction;
     }
 }
 
