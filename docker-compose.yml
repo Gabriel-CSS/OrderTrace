@@ -16,6 +16,10 @@ services:
       - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=ordertrace;Username=postgres;Password=postgres
       - OpenTelemetry__UseOtlpExporter=true
       - OpenTelemetry__OtlpEndpoint=http://jaeger:4318
+      - DB_HOST=postgres
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME=ordertrace
     volumes:
       - ./logs:/app/logs
     depends_on:

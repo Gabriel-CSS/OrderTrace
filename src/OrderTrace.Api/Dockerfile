@@ -28,8 +28,12 @@ RUN dotnet publish "OrderTrace.Api.csproj" -c $BUILD_CONFIGURATION -o /app/publi
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS final
 WORKDIR /app
 
-# Install curl for healthcheck
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Install curl for healthcheck, bash for entrypoint script, and postgresql-client for DB connectivity check
+RUN apt-get update && apt-get install -y curl bash postgresql-client && rm -rf /var/lib/apt/lists/*
+
+# Install EF Core tools for migrations
+RUN dotnet tool install --global dotnet-ef
+ENV PATH="${PATH}:/root/.dotnet/tools"
 
 # Create logs directory
 RUN mkdir -p /app/logs && chmod 777 /app/logs
@@ -39,7 +43,7 @@ COPY --from=publish /app/publish .
 
 # Copy entrypoint script
 COPY src/OrderTrace.Api/docker-entrypoint.sh /app/
-RUN chmod +x /app/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh
 
 # Expose ports
 EXPOSE 8080

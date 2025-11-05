@@ -122,8 +122,9 @@ public static class DependencyInjection
                 {
                     tracing.AddOtlpExporter(otlpOptions =>
                     {
-                        otlpOptions.Endpoint = new Uri(
-                            configuration["OpenTelemetry:OtlpEndpoint"] ?? "http://localhost:4318");
+                        var endpoint = configuration["OpenTelemetry:OtlpEndpoint"] ?? "http://localhost:4318";
+                        otlpOptions.Endpoint = new Uri($"{endpoint}/v1/traces");
+                        otlpOptions.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
                     });
                 }
             })

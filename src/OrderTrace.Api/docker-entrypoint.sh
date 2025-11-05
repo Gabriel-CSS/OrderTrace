@@ -7,12 +7,12 @@ echo "=========================================="
 
 # Wait for PostgreSQL to be ready
 echo "Waiting for PostgreSQL..."
-until dotnet ef database update --no-build 2>/dev/null; do
-  echo "PostgreSQL is unavailable - retrying in 5 seconds..."
-  sleep 5
+until PGPASSWORD=$DB_PASSWORD psql -h "${DB_HOST:-postgres}" -U "${DB_USER:-postgres}" -d "${DB_NAME:-ordertrace}" -c '\q' 2>/dev/null; do
+  echo "PostgreSQL is unavailable - retrying in 3 seconds..."
+  sleep 3
 done
 
-echo "Database migrations applied successfully"
+echo "PostgreSQL is ready!"
 echo ""
-echo "Starting API..."
+echo "Starting API (migrations will run automatically)..."
 exec dotnet OrderTrace.Api.dll
